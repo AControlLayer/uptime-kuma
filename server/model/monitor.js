@@ -24,6 +24,7 @@ const Gamedig = require("gamedig");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const { UptimeCalculator } = require("../uptime-calculator");
+const { notificationQueue } = require("../notification-queue");
 const { CookieJar } = require("tough-cookie");
 const { HttpsCookieAgent } = require("http-cookie-agent/http");
 const https = require("https");
@@ -161,6 +162,7 @@ class Monitor extends BeanModel {
             rabbitmqNodes: JSON.parse(this.rabbitmqNodes),
             conditions: JSON.parse(this.conditions),
             ipFamily: this.ipFamily,
+            suppressOnParentDown: this.suppressOnParentDown,
 
             // ping advanced options
             ping_numeric: this.isPingNumeric(),
@@ -930,8 +932,16 @@ class Monitor extends BeanModel {
                 bean.important = true;
 
                 if (Monitor.isImportantForNotification(isFirstBeat, previousBeat?.status, bean.status)) {
-                    log.debug("monitor", `[${this.name}] sendNotification`);
-                    await Monitor.sendNotification(isFirstBeat, this, bean);
+                    if (this.suppressOnParentDown && this.parent && bean.status === DOWN) {
+                        log.debug("monitor", `[${this.name}] Queuing notification (cascade suppression enabled)`);
+                        // Attach parent interval for delay calculation
+                        const parentRow = await R.getRow("SELECT `interval` FROM monitor WHERE id = ?", [this.parent]);
+                        this._parentInterval = parentRow ? parentRow.interval : 60;
+                        notificationQueue.enqueue(this, bean, isFirstBeat, Monitor.sendNotification);
+                    } else {
+                        log.debug("monitor", `[${this.name}] sendNotification`);
+                        await Monitor.sendNotification(isFirstBeat, this, bean);
+                    }
                 } else {
                     log.debug("monitor", `[${this.name}] will not sendNotification because it is (or was) under maintenance`);
                 }
@@ -952,8 +962,15 @@ class Monitor extends BeanModel {
                     ++bean.downCount;
                     if (bean.downCount >= this.resendInterval) {
                         // Send notification again, because we are still DOWN
-                        log.debug("monitor", `[${this.name}] sendNotification again: Down Count: ${bean.downCount} | Resend Interval: ${this.resendInterval}`);
-                        await Monitor.sendNotification(isFirstBeat, this, bean);
+                        if (this.suppressOnParentDown && this.parent) {
+                            log.debug("monitor", `[${this.name}] Queuing resend notification (cascade suppression enabled)`);
+                            const parentRow = await R.getRow("SELECT `interval` FROM monitor WHERE id = ?", [this.parent]);
+                            this._parentInterval = parentRow ? parentRow.interval : 60;
+                            notificationQueue.enqueue(this, bean, isFirstBeat, Monitor.sendNotification);
+                        } else {
+                            log.debug("monitor", `[${this.name}] sendNotification again: Down Count: ${bean.downCount} | Resend Interval: ${this.resendInterval}`);
+                            await Monitor.sendNotification(isFirstBeat, this, bean);
+                        }
 
                         // Reset down count
                         bean.downCount = 0;

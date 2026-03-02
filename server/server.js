@@ -95,6 +95,7 @@ const { getSettings, setSettings, setting, initJWTSecret, checkLogin, doubleChec
 
 log.debug("server", "Importing Notification");
 const { Notification } = require("./notification");
+const { notificationQueue } = require("./notification-queue");
 Notification.init();
 
 log.debug("server", "Importing Database");
@@ -799,6 +800,7 @@ let needSetup = false;
                 bean.name = monitor.name;
                 bean.description = monitor.description;
                 bean.parent = monitor.parent;
+                bean.suppressOnParentDown = monitor.suppressOnParentDown;
                 bean.type = monitor.type;
                 bean.url = monitor.url;
                 bean.method = monitor.method;
@@ -1853,6 +1855,9 @@ async function shutdownFunction(signal) {
     log.info("server", "Called signal: " + signal);
 
     await server.stop();
+
+    log.info("server", "Flushing notification queue before shutdown");
+    await notificationQueue.flush();
 
     log.info("server", "Stopping all monitors");
     for (let id in server.monitorList) {
