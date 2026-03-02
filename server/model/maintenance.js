@@ -259,7 +259,7 @@ class Maintenance extends BeanModel {
                         // End of maintenance for this timeslot
                         this.beanMeta.status = "scheduled";
                         UptimeKumaServer.getInstance().sendMaintenanceListByUserID(this.user_id);
-                    }, duration);
+                    }, Math.min(duration, 2147483647));
 
                     // Set last start date to current time
                     this.last_start_date = current.toISOString();
