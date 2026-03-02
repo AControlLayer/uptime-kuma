@@ -35,6 +35,7 @@ jobs:
         with:
           context: .
           file: docker/dockerfile
+          target: release
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:2-cascade
