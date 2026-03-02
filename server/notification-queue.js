@@ -26,7 +26,7 @@ class NotificationQueue {
      * @param {Function} sendFn The function to call if notification should send: (isFirstBeat, monitor, bean) => Promise<void>
      * @returns {void}
      */
-    enqueue(monitor, bean, isFirstBeat, sendFn) {
+    enqueue(monitor, bean, isFirstBeat, sendFn, parentInterval = 60) {
         // Cancel any existing pending notification for this monitor
         if (this.pending.has(monitor.id)) {
             clearTimeout(this.pending.get(monitor.id).timer);
@@ -34,7 +34,6 @@ class NotificationQueue {
         }
 
         // Calculate delay: parent's interval + 5s buffer, minimum 10s
-        const parentInterval = monitor._parentInterval || 60;
         const delayMs = Math.max(10000, parentInterval * 1000 + 5000);
 
         log.info("notification-queue", `[${monitor.name}] Queuing notification for ${delayMs}ms (parent interval: ${parentInterval}s)`);

@@ -970,10 +970,9 @@ class Monitor extends BeanModel {
                 if (Monitor.isImportantForNotification(isFirstBeat, previousBeat?.status, bean.status)) {
                     if (this.suppressOnParentDown && this.parent && bean.status === DOWN) {
                         log.debug("monitor", `[${this.name}] Queuing notification (cascade suppression enabled)`);
-                        // Attach parent interval for delay calculation
                         const parentRow = await R.getRow("SELECT `interval` FROM monitor WHERE id = ?", [this.parent]);
-                        this._parentInterval = parentRow ? parentRow.interval : 60;
-                        notificationQueue.enqueue(this, bean, isFirstBeat, Monitor.sendNotification);
+                        const parentInterval = parentRow ? parentRow.interval : 60;
+                        notificationQueue.enqueue(this, bean, isFirstBeat, Monitor.sendNotification, parentInterval);
                     } else {
                         log.debug("monitor", `[${this.name}] sendNotification`);
                         await Monitor.sendNotification(isFirstBeat, this, bean);
@@ -1003,8 +1002,8 @@ class Monitor extends BeanModel {
                         if (this.suppressOnParentDown && this.parent) {
                             log.debug("monitor", `[${this.name}] Queuing resend notification (cascade suppression enabled)`);
                             const parentRow = await R.getRow("SELECT `interval` FROM monitor WHERE id = ?", [this.parent]);
-                            this._parentInterval = parentRow ? parentRow.interval : 60;
-                            notificationQueue.enqueue(this, bean, isFirstBeat, Monitor.sendNotification);
+                            const parentInterval = parentRow ? parentRow.interval : 60;
+                            notificationQueue.enqueue(this, bean, isFirstBeat, Monitor.sendNotification, parentInterval);
                         } else {
                             log.debug(
                                 "monitor",
