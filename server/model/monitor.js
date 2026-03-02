@@ -66,6 +66,10 @@ const DomainExpiry = require("./domain_expiry");
 
 const rootCertificates = rootCertificatesFingerprints();
 
+// Maximum safe value for setTimeout (2^31 - 1 ms ≈ 24.8 days).
+// Values exceeding this trigger Node.js TimeoutOverflowWarning.
+const MAX_TIMEOUT_MS = 2147483647;
+
 /**
  * status:
  *      0 = DOWN
@@ -770,7 +774,7 @@ class Monitor extends BeanModel {
                             // No need to insert successful heartbeat for push type, so end here
                             retries = 0;
                             log.debug("monitor", `[${this.name}] timeout = ${timeout}`);
-                            this.heartbeatInterval = setTimeout(safeBeat, timeout);
+                            this.heartbeatInterval = setTimeout(safeBeat, Math.min(timeout, MAX_TIMEOUT_MS));
                             return;
                         }
                     } else {
@@ -1094,7 +1098,7 @@ class Monitor extends BeanModel {
 
                 log.debug("monitor", `[${this.name}] Next heartbeat in: ${intervalRemainingMs}ms`);
 
-                this.heartbeatInterval = setTimeout(safeBeat, intervalRemainingMs);
+                this.heartbeatInterval = setTimeout(safeBeat, Math.min(intervalRemainingMs, MAX_TIMEOUT_MS));
             } else {
                 log.info("monitor", `[${this.name}] isStop = true, no next check.`);
             }
@@ -1114,7 +1118,7 @@ class Monitor extends BeanModel {
 
                 if (!this.isStop) {
                     log.info("monitor", "Try to restart the monitor");
-                    this.heartbeatInterval = setTimeout(safeBeat, this.interval * 1000);
+                    this.heartbeatInterval = setTimeout(safeBeat, Math.min(this.interval * 1000, MAX_TIMEOUT_MS));
                 }
             }
         };
@@ -1123,7 +1127,7 @@ class Monitor extends BeanModel {
         if (this.type === "push") {
             this.heartbeatInterval = setTimeout(() => {
                 safeBeat();
-            }, this.interval * 1000);
+            }, Math.min(this.interval * 1000, MAX_TIMEOUT_MS));
         } else {
             safeBeat();
         }
