@@ -2176,6 +2176,17 @@
                                 />
                             </div>
 
+                            <!-- Cascade Suppression -->
+                            <div v-if="monitor.parent" class="my-3">
+                                <div class="form-check form-switch">
+                                    <input id="suppressOnParentDown" v-model="monitor.suppressOnParentDown" class="form-check-input" type="checkbox">
+                                    <label class="form-check-label" for="suppressOnParentDown">
+                                        {{ $t("Suppress notifications when parent is down") }}
+                                    </label>
+                                </div>
+                                <div class="form-text">{{ $t("suppressOnParentDownDescription") }}</div>
+                            </div>
+
                             <!-- Description -->
                             <div class="my-3">
                                 <label for="description" class="form-label">{{ $t("Description") }}</label>
@@ -3264,6 +3275,7 @@ const monitorDefaults = {
     type: "http",
     name: "",
     parent: null,
+    suppressOnParentDown: false,
     url: defaultValueList.http.url,
     wsSubprotocol: "",
     method: "GET",
