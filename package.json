@@ -143,7 +143,7 @@
         "socket.io-client": "~4.8.3",
         "socks-proxy-agent": "~8.0.5",
         "sqlstring": "~2.3.3",
-        "tar": "~6.2.1",
+        "tar": "~7.5.21",
         "tcp-ping": "~0.1.1",
         "thirty-two": "~1.0.2",
         "tldts": "~7.0.23",
