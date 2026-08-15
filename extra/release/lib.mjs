@@ -1,6 +1,8 @@
 import "dotenv/config";
 import * as childProcess from "child_process";
 import semver from "semver";
+import fs from "fs";
+import tar from "tar";
 
 export const dryRun = process.env.RELEASE_DRY_RUN === "1";
 
@@ -23,16 +25,14 @@ export function checkDocker() {
 
 /**
  * Get Docker Hub repository name
+ * @returns {string[]} List of repository names
  */
 export function getRepoNames() {
     if (process.env.RELEASE_REPO_NAMES) {
         // Split by comma
         return process.env.RELEASE_REPO_NAMES.split(",").map((name) => name.trim());
     }
-    return [
-        "louislam/uptime-kuma",
-        "ghcr.io/louislam/uptime-kuma",
-    ];
+    return ["louislam/uptime-kuma", "ghcr.io/louislam/uptime-kuma"];
 }
 
 /**
@@ -57,15 +57,15 @@ export function buildDist() {
  * @param {string} platform Build platform
  * @returns {void}
  */
-export function buildImage(repoNames, tags, target, buildArgs = "", dockerfile = "docker/dockerfile", platform = "linux/amd64,linux/arm64,linux/arm/v7") {
-    let args = [
-        "buildx",
-        "build",
-        "-f",
-        dockerfile,
-        "--platform",
-        platform,
-    ];
+export function buildImage(
+    repoNames,
+    tags,
+    target,
+    buildArgs = "",
+    dockerfile = "docker/dockerfile",
+    platform = "linux/amd64,linux/arm64,linux/arm/v7"
+) {
+    let args = ["buildx", "build", "-f", dockerfile, "--platform", platform];
 
     for (let repoName of repoNames) {
         // Add tags
@@ -74,22 +74,14 @@ export function buildImage(repoNames, tags, target, buildArgs = "", dockerfile =
         }
     }
 
-    args = [
-        ...args,
-        "--target",
-        target,
-    ];
+    args = [...args, "--target", target];
 
     // Add build args
     if (buildArgs) {
         args.push("--build-arg", buildArgs);
     }
 
-    args = [
-        ...args,
-        ".",
-        "--push",
-    ];
+    args = [...args, ".", "--push"];
 
     if (!dryRun) {
         childProcess.spawnSync("docker", args, { stdio: "inherit" });
@@ -172,11 +164,13 @@ export function pressAnyKey() {
     console.log("Git Push and Publish the release note on github, then press any key to continue");
     process.stdin.setRawMode(true);
     process.stdin.resume();
-    return new Promise(resolve => process.stdin.once("data", data => {
-        process.stdin.setRawMode(false);
-        process.stdin.pause();
-        resolve();
-    }));
+    return new Promise((resolve) =>
+        process.stdin.once("data", (data) => {
+            process.stdin.setRawMode(false);
+            process.stdin.pause();
+            resolve();
+        })
+    );
 }
 
 /**
@@ -189,9 +183,9 @@ export function ver(version, identifier) {
     const obj = semver.parse(version);
 
     if (obj.prerelease.length === 0) {
-        obj.prerelease = [ identifier ];
+        obj.prerelease = [identifier];
     } else {
-        obj.prerelease[0] = [ obj.prerelease[0], identifier ].join("-");
+        obj.prerelease[0] = [obj.prerelease[0], identifier].join("-");
     }
     return obj.format();
 }
@@ -202,6 +196,7 @@ export function ver(version, identifier) {
  * @param {string} version Version
  * @param {string} githubToken GitHub token
  * @returns {void}
+ * @deprecated
  */
 export function uploadArtifacts(version, githubToken) {
     let args = [
@@ -251,14 +246,130 @@ export function execSync(cmd) {
 }
 
 /**
- * Check if the current branch is "release"
+ * Check if the current branch matches the expected release branch pattern
+ * @param {string} expectedBranch Expected branch name (can be "release" or "release-{version}")
  * @returns {void}
  */
-export function checkReleaseBranch() {
-    const res = childProcess.spawnSync("git", [ "rev-parse", "--abbrev-ref", "HEAD" ]);
+export function checkReleaseBranch(expectedBranch = "release") {
+    const res = childProcess.spawnSync("git", ["rev-parse", "--abbrev-ref", "HEAD"]);
     const branch = res.stdout.toString().trim();
-    if (branch !== "release") {
-        console.error(`Current branch is ${branch}, please switch to "release" branch`);
+    if (branch !== expectedBranch) {
+        console.error(`Current branch is ${branch}, please switch to "${expectedBranch}" branch`);
         process.exit(1);
     }
+}
+
+/**
+ * Create dist.tar.gz from the dist directory
+ * Similar to "tar -zcvf dist.tar.gz dist", but using nodejs
+ * @returns {Promise<void>}
+ */
+export async function createDistTarGz() {
+    const distPath = "dist";
+    const outputPath = "./tmp/dist.tar.gz";
+    const tmpDir = "./tmp";
+
+    // Ensure tmp directory exists
+    if (!fs.existsSync(tmpDir)) {
+        fs.mkdirSync(tmpDir, { recursive: true });
+    }
+
+    // Check if dist directory exists
+    if (!fs.existsSync(distPath)) {
+        console.error("Error: dist directory not found");
+        process.exit(1);
+    }
+
+    console.log(`Creating ${outputPath} from ${distPath}...`);
+
+    try {
+        await tar.create(
+            {
+                gzip: true,
+                file: outputPath,
+            },
+            [distPath]
+        );
+        console.log(`Successfully created ${outputPath}`);
+    } catch (error) {
+        console.error(`Failed to create tarball: ${error.message}`);
+        process.exit(1);
+    }
+}
+
+/**
+ * Create a draft release PR
+ * @param {string} version Version
+ * @param {string} previousVersion Previous version tag
+ * @param {boolean} dryRun Still create the PR, but add "[DRY RUN]" to the title
+ * @param {string} branchName The branch name to use for the PR head (defaults to "release")
+ * @param {string} githubRunId The GitHub Actions run ID for linking to artifacts
+ * @returns {Promise<number>} The PR number
+ */
+export async function createReleasePR(version, previousVersion, dryRun, branchName = "release", githubRunId = null) {
+    const title = dryRun ? `chore: update to ${version} (dry run)` : `chore: update to ${version}`;
+
+    // Build the artifact link - use direct run link if available, otherwise link to workflow file
+    const artifactLink = githubRunId
+        ? `https://github.com/louislam/uptime-kuma/actions/runs/${githubRunId}/workflow`
+        : `https://github.com/louislam/uptime-kuma/actions/workflows/beta-release.yml`;
+
+    const tmpDir = "./tmp";
+    if (!fs.existsSync(tmpDir)) {
+        fs.mkdirSync(tmpDir, { recursive: true });
+    }
+
+    const body = `## Release ${version}
+
+This PR prepares the release for version ${version}.
+
+### Release Artifacts
+The \`dist.tar.gz\` archive will be available as an artifact in the [workflow run](${artifactLink}).
+`;
+
+    // Create the PR using gh CLI
+    const args = [
+        "pr",
+        "create",
+        "--title",
+        title,
+        "--body",
+        body,
+        "--base",
+        "master",
+        "--head",
+        branchName,
+        "--draft",
+    ];
+
+    console.log(`Creating draft PR: ${title}`);
+
+    const result = childProcess.spawnSync("gh", args, {
+        encoding: "utf-8",
+        stdio: "pipe",
+    });
+
+    if (result.status !== 0) {
+        console.error(result.stderr);
+        console.error("Failed to create pull request");
+        process.exit(1);
+    }
+
+    const prUrl = result.stdout.trim();
+    console.log(prUrl);
+
+    // Extract PR number from URL (e.g., https://github.com/louislam/uptime-kuma/pull/1234)
+    const prNumberMatch = prUrl.match(/\/pull\/(\d+)/);
+    const prNumber = prNumberMatch ? parseInt(prNumberMatch[1], 10) : null;
+
+    if (prNumber) {
+        console.log(`PR number: ${prNumber}`);
+        // Save PR number to file for the finish script
+        fs.writeFileSync(`${tmpDir}/pr-number.txt`, String(prNumber));
+    } else {
+        console.warn("Could not extract PR number from URL, auto-finish will not be possible");
+    }
+
+    console.log("Successfully created draft pull request");
+    return prNumber;
 }

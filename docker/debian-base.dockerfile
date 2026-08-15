@@ -1,5 +1,5 @@
 # Download Apprise deb package
-FROM node:20-bookworm-slim AS download-apprise
+FROM node:22-bookworm-slim AS download-apprise
 WORKDIR /app
 COPY ./extra/download-apprise.mjs ./download-apprise.mjs
 RUN apt update && \
@@ -9,7 +9,7 @@ RUN apt update && \
 
 # Base Image (Slim)
 # If the image changed, the second stage image should be changed too
-FROM node:20-bookworm-slim AS base2-slim
+FROM node:22-bookworm-slim AS base2-slim
 ARG TARGETPLATFORM
 
 # Specify --no-install-recommends to skip unused dependencies, make the base much smaller!
@@ -58,6 +58,11 @@ RUN curl https://pkg.cloudflare.com/cloudflare-main.gpg --output /usr/share/keyr
 COPY ./docker/etc/nscd.conf /etc/nscd.conf
 COPY ./docker/etc/sudoers /etc/sudoers
 
+# Debian bookworm does not have Let's Encrypt's Gen Y root certs.
+# Not sure if it is the best solution, and not sure if Debian will add them in the future, but for now we can just add them manually.
+RUN curl -fsSL https://letsencrypt.org/certs/gen-y/root-ye.pem -o /usr/local/share/ca-certificates/isrg-root-ye.crt && \
+    curl -fsSL https://letsencrypt.org/certs/gen-y/root-yr.pem -o /usr/local/share/ca-certificates/isrg-root-yr.crt && \
+    update-ca-certificates
 
 # Full Base Image
 # MariaDB, Chromium and fonts
