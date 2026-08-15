@@ -971,12 +971,20 @@ class Monitor extends BeanModel {
             if (isImportant) {
                 bean.important = true;
 
+                if (bean.status !== DOWN) {
+                    notificationQueue.cancel(this.id);
+                }
+
                 if (Monitor.isImportantForNotification(isFirstBeat, previousBeat?.status, bean.status)) {
                     if (this.suppressOnParentDown && this.parent && bean.status === DOWN) {
                         log.debug("monitor", `[${this.name}] Queuing notification (cascade suppression enabled)`);
                         const parentRow = await R.getRow("SELECT `interval` FROM monitor WHERE id = ?", [this.parent]);
-                        const parentInterval = parentRow ? parentRow.interval : 60;
-                        notificationQueue.enqueue(this, bean, isFirstBeat, Monitor.sendNotification, parentInterval);
+                        if (!parentRow) {
+                            log.warn("monitor", `[${this.name}] Parent monitor ${this.parent} is absent; sending without suppression`);
+                            await Monitor.sendNotification(isFirstBeat, this, bean);
+                        } else {
+                            notificationQueue.enqueue(this, bean, isFirstBeat, Monitor.sendNotification, parentRow.interval);
+                        }
                     } else {
                         log.debug("monitor", `[${this.name}] sendNotification`);
                         await Monitor.sendNotification(isFirstBeat, this, bean);
@@ -1006,8 +1014,12 @@ class Monitor extends BeanModel {
                         if (this.suppressOnParentDown && this.parent) {
                             log.debug("monitor", `[${this.name}] Queuing resend notification (cascade suppression enabled)`);
                             const parentRow = await R.getRow("SELECT `interval` FROM monitor WHERE id = ?", [this.parent]);
-                            const parentInterval = parentRow ? parentRow.interval : 60;
-                            notificationQueue.enqueue(this, bean, isFirstBeat, Monitor.sendNotification, parentInterval);
+                            if (!parentRow) {
+                                log.warn("monitor", `[${this.name}] Parent monitor ${this.parent} is absent; sending without suppression`);
+                                await Monitor.sendNotification(isFirstBeat, this, bean);
+                            } else {
+                                notificationQueue.enqueue(this, bean, isFirstBeat, Monitor.sendNotification, parentRow.interval);
+                            }
                         } else {
                             log.debug(
                                 "monitor",

@@ -11,6 +11,7 @@ const { log, DOWN } = require("../src/util");
  */
 class NotificationQueue {
 
+    /** Create an empty delayed-notification queue. */
     constructor() {
         /** @type {Map<number, {timer: NodeJS.Timeout, monitor: object, bean: object, isFirstBeat: boolean}>} */
         this.pending = new Map();
@@ -19,19 +20,21 @@ class NotificationQueue {
     /**
      * Enqueue a notification for delayed sending with parent check.
      * Only one pending notification per monitor — newer replaces older.
-     *
      * @param {object} monitor The child monitor instance
      * @param {object} bean The heartbeat bean
      * @param {boolean} isFirstBeat Whether this is the first beat
      * @param {Function} sendFn The function to call if notification should send: (isFirstBeat, monitor, bean) => Promise<void>
+     * @param {number} parentInterval Parent monitor interval in seconds
+     * @throws {TypeError} When the parent interval is not a positive number
      * @returns {void}
      */
-    enqueue(monitor, bean, isFirstBeat, sendFn, parentInterval = 60) {
-        // Cancel any existing pending notification for this monitor
-        if (this.pending.has(monitor.id)) {
-            clearTimeout(this.pending.get(monitor.id).timer);
-            this.pending.delete(monitor.id);
+    enqueue(monitor, bean, isFirstBeat, sendFn, parentInterval) {
+        if (!Number.isFinite(parentInterval) || parentInterval <= 0) {
+            throw new TypeError(`Invalid parent interval for monitor ${monitor.id}: ${parentInterval}`);
         }
+
+        // Cancel any existing pending notification for this monitor
+        this.cancel(monitor.id);
 
         // Calculate delay: parent's interval + 5s buffer, minimum 10s
         const delayMs = Math.max(10000, parentInterval * 1000 + 5000);
@@ -52,8 +55,23 @@ class NotificationQueue {
     }
 
     /**
+     * Cancel a delayed notification after the child monitor recovers.
+     * @param {number} monitorId Child monitor identifier
+     * @returns {boolean} Whether a pending notification was cancelled
+     */
+    cancel(monitorId) {
+        const entry = this.pending.get(monitorId);
+        if (!entry) {
+            return false;
+        }
+        clearTimeout(entry.timer);
+        this.pending.delete(monitorId);
+        log.info("notification-queue", `[${entry.monitor.name}] Cancelled delayed notification`);
+        return true;
+    }
+
+    /**
      * Resolve a pending notification by checking parent status.
-     *
      * @param {object} monitor The child monitor
      * @param {object} bean The heartbeat bean
      * @param {boolean} isFirstBeat Whether this is the first beat
@@ -61,38 +79,34 @@ class NotificationQueue {
      * @returns {Promise<void>}
      */
     async resolve(monitor, bean, isFirstBeat, sendFn) {
+        let parentHeartbeat;
         try {
-            const parentHeartbeat = await R.getRow(
+            parentHeartbeat = await R.getRow(
                 "SELECT status FROM heartbeat WHERE monitor_id = ? ORDER BY time DESC LIMIT 1",
                 [monitor.parent]
             );
-
-            if (parentHeartbeat && parentHeartbeat.status === DOWN) {
-                // Parent is DOWN — suppress this notification
-                const parentRow = await R.getRow("SELECT name FROM monitor WHERE id = ?", [monitor.parent]);
-                const parentName = parentRow ? parentRow.name : `#${monitor.parent}`;
-                log.info("notification-queue", `[${monitor.name}] Notification SUPPRESSED: parent [${parentName}] is DOWN`);
-                return;
-            }
-
-            // Parent is UP or PENDING or no heartbeat — send the notification
-            log.info("notification-queue", `[${monitor.name}] Parent is UP, sending delayed notification`);
-            await sendFn(isFirstBeat, monitor, bean);
         } catch (e) {
-            log.error("notification-queue", `[${monitor.name}] Error resolving notification: ${e.message}`);
-            // On error, send the notification rather than silently suppress
-            try {
-                await sendFn(isFirstBeat, monitor, bean);
-            } catch (sendErr) {
-                log.error("notification-queue", `[${monitor.name}] Failed to send notification: ${sendErr.message}`);
-            }
+            log.error("notification-queue", `[${monitor.name}] Parent status could not be read; sending without suppression: ${e.message}`);
+            await sendFn(isFirstBeat, monitor, bean);
+            return;
         }
+
+        if (parentHeartbeat && parentHeartbeat.status === DOWN) {
+            log.info("notification-queue", `[${monitor.name}] Notification SUPPRESSED: parent [#${monitor.parent}] is DOWN`);
+            return;
+        }
+
+        // Parent is UP or PENDING or has no heartbeat — send the notification.
+        // This call intentionally sits outside the database catch above: a
+        // delivery failure must propagate once, never be retried as though the
+        // parent lookup had failed and never be reduced to a log line.
+        log.info("notification-queue", `[${monitor.name}] Parent is not DOWN, sending delayed notification`);
+        await sendFn(isFirstBeat, monitor, bean);
     }
 
     /**
      * Flush all pending notifications immediately (used on shutdown).
      * Sends all queued notifications without checking parent status.
-     *
      * @returns {Promise<void>}
      */
     async flush() {
@@ -100,19 +114,24 @@ class NotificationQueue {
         const entries = Array.from(this.pending.values());
         this.pending.clear();
 
+        const failures = [];
         for (const entry of entries) {
             clearTimeout(entry.timer);
             try {
                 await entry.sendFn(entry.isFirstBeat, entry.monitor, entry.bean);
             } catch (e) {
                 log.error("notification-queue", `Failed to flush notification for [${entry.monitor.name}]: ${e.message}`);
+                failures.push(new Error(`Failed to flush notification for monitor ${entry.monitor.id}`, { cause: e }));
             }
+        }
+        if (failures.length) {
+            throw new AggregateError(failures, `${failures.length} delayed notification(s) failed during flush`);
         }
     }
 
     /**
      * Get the number of pending notifications.
-     * @returns {number}
+     * @returns {number} Pending notification count
      */
     get size() {
         return this.pending.size;

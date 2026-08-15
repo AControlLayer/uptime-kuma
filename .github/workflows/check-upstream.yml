@@ -5,14 +5,19 @@ on:
     - cron: '0 9 1 * *'  # 1st of each month at 9:00 UTC
   workflow_dispatch: {}
 
+permissions: {}
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Check upstream issue status
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           STATE=$(gh api repos/louislam/uptime-kuma/issues/1089 --jq '.state')
           TITLE=$(gh api repos/louislam/uptime-kuma/issues/1089 --jq '.title')
           UPDATED=$(gh api repos/louislam/uptime-kuma/issues/1089 --jq '.updated_at')
